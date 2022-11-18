@@ -1,0 +1,5 @@
+r
+loadfile _build/pwm_sine_tone_sdk16_blank.hex 
+r
+g
+exit

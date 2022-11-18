@@ -1,0 +1,5 @@
+r
+loadfile _build/capacitive-touch_sdk16_blank.hex 
+r
+g
+exit
