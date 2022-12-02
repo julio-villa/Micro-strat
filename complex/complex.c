@@ -51,13 +51,13 @@ uint16_t sine_buffer[SINE_BUFFER_SIZE] = {0};
 
 // Sample data configurations
 // Note: this is a 32 kB buffer (about 25% of RAM)
-#define SAMPLING_FREQUENCY 500000 // 16 kHz sampling rate
+#define SAMPLING_FREQUENCY 160000 // 16 kHz sampling rate
 #define BUFFER_SIZE 16000 // one second worth of data
 uint16_t samples0[BUFFER_SIZE] = {0}; // stores PWM duty cycle values
 uint16_t samples1[BUFFER_SIZE] = {0};
 
 nrfx_pwm_config_t config = {
-    .output_pins = {EDGE_P8,NRFX_PWM_PIN_NOT_USED, NRFX_PWM_PIN_NOT_USED, NRFX_PWM_PIN_NOT_USED},
+    .output_pins = {SPEAKER_OUT,NRFX_PWM_PIN_NOT_USED, NRFX_PWM_PIN_NOT_USED, NRFX_PWM_PIN_NOT_USED},
     .base_clock = NRF_PWM_CLK_16MHz,
     .count_mode = NRF_PWM_MODE_UP,
     .top_value = 16000000/SAMPLING_FREQUENCY/2,
@@ -85,32 +85,81 @@ int notes_max[4] = {246, 329, 440, 587};
 
 /*** Initialization & handling code ***/
 
-static void set_sample_data(uint16_t frequency, uint16_t* samples) {
+static void set_sample_data(uint16_t* samples, uint16_t* frequencies, int num_touches) {
 
   // determine number of sine values to "step" per played sample
   // units are (sine-values/cycle) * (cycles/second) / (samples/second) = (sine-values/sample)
 
-  float step_size = (float)SINE_BUFFER_SIZE * (float)frequency / (float)SAMPLING_FREQUENCY;
-  float i = 0;
-  int j = 0;
-  while(j < BUFFER_SIZE){
-    samples[j] = sine_buffer[(int)i];
-    j++;
-    i = i + step_size;
-    if(i>=SINE_BUFFER_SIZE){
-      i -= SINE_BUFFER_SIZE;
+  // printf("%d  ", num_touches);
+  for(int k = 0; k < 4; k++){
+    // printf("%d  ", frequencies[k]);
+    float step_size = (float)SINE_BUFFER_SIZE * (float)frequencies[k] / (float)SAMPLING_FREQUENCY;
+    float i = 0;
+    int j = 0;
+    while(j < BUFFER_SIZE){
+      if(frequencies[k] == 0){
+        samples[j] += 0;
+      }
+      else{
+        samples[j] += sine_buffer[(int)i];
+        printf("%d  \n", samples[j]);
+      }
+      j++;
+      i = i + step_size;
+      if(i>=SINE_BUFFER_SIZE){
+        i -= SINE_BUFFER_SIZE;
+      }
     }
   }
+
+  for(int k = 0; k < SINE_BUFFER_SIZE; k++){
+    if(num_touches == 0){
+      samples[k] = 0;
+    }
+    else{
+      samples[k] = (int)(samples[k] / num_touches);
+    }
+  }
+
+  // for(int k = 0; k < 4; k++){
+  //   float step_size = (float)SINE_BUFFER_SIZE * (float)frequencies[k] / (float)SAMPLING_FREQUENCY;
+  //   float i = 0;
+  //   int j = 0;
+  //   while(j < BUFFER_SIZE){
+  //     samples[j] = sine_buffer[(int)i];
+  //     j++;
+  //     i = i + step_size;
+  //     if(i>=SINE_BUFFER_SIZE){
+  //       i -= SINE_BUFFER_SIZE;
+  //     }
+  //   }
+  // }
+
+  // float step_size = (float)SINE_BUFFER_SIZE * (float)frequency / (float)SAMPLING_FREQUENCY;
+  // float i = 0;
+  // int j = 0;
+  // while(j < BUFFER_SIZE){
+  //   samples[j] = sine_buffer[(int)i];
+  //   j++;
+  //   i = i + step_size;
+  //   if(i>=SINE_BUFFER_SIZE){
+  //     i -= SINE_BUFFER_SIZE;
+  //   }
+  // }
 }
 
 static void pwm_callback(nrfx_pwm_evt_type_t type){
   printf("Handler called \n");
-  uint16_t* samples_array;
+  uint16_t* data_array;
+  uint16_t frequencies_array[4] = {0};
+
+  int touch_count = 0;
+
   if (type == NRFX_PWM_EVT_END_SEQ0){
-    samples_array = samples0;
+    data_array = samples0;
   }
   else if(type == NRFX_PWM_EVT_END_SEQ1){
-    samples_array = samples1;
+    data_array = samples1;
   }
 
   float t0 = adc_sample_blocking(ADC_TOUCH_CHANNEL0);
@@ -123,13 +172,16 @@ static void pwm_callback(nrfx_pwm_evt_type_t type){
   if(touch_array[0] > 0.17 || touch_array[1] > 0.17 || touch_array[2] > 0.17 || touch_array[3] > 0.17){
     for(int i = 0; i < 4; i++){
       if(touch_array[i] > 0.17){
-        set_sample_data(notes_min[i] + ((touch_array[i]-0.17) * notes_max[i]), samples_array);
+        touch_count++;
+        frequencies_array[i] = notes_min[i] + ((touch_array[i]-0.17) * notes_max[i]);
+        // set_sample_data(notes_min[i] + ((touch_array[i]-0.17) * notes_max[i]), data_array);
       }
     }
+    set_sample_data(data_array, &frequencies_array, touch_count);
   }
   else{
-    set_sample_data(0, samples0);
-    set_sample_data(0, samples1);
+    set_sample_data(samples0, &frequencies_array, touch_count);
+    set_sample_data(samples1, &frequencies_array, touch_count);
   }
 }
 

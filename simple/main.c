@@ -30,6 +30,7 @@
 #define ANALOG_TOUCH1 NRF_SAADC_INPUT_AIN1
 #define ANALOG_TOUCH2 NRF_SAADC_INPUT_AIN2
 #define ANALOG_TOUCH3 NRF_SAADC_INPUT_AIN4
+#define MODULATION NRF_SAADC_INPUT_AIN5
 
 // ADC channel configurations
 // These are ADC channel numbers that can be used in ADC calls
@@ -37,6 +38,7 @@
 #define ADC_TOUCH_CHANNEL1  1
 #define ADC_TOUCH_CHANNEL2  2
 #define ADC_TOUCH_CHANNEL3  3
+#define ADC_MOD_CHANNEL  4
 
 // Global variables
 APP_TIMER_DEF(sample_timer);
@@ -196,10 +198,13 @@ static void sample_timer_callback(void* _unused) {
   float t2 = adc_sample_blocking(ADC_TOUCH_CHANNEL2);
   float t3 = adc_sample_blocking(ADC_TOUCH_CHANNEL3);
 
+  float mod = adc_sample_blocking(MODULATION);
+
+  printf("%f \n", mod);
+
   float touch_array[4] = {t0,t1,t2,t3};
 
   if(touch_array[0] > 0.17 || touch_array[1] > 0.17 || touch_array[2] > 0.17 || touch_array[3] > 0.17){
-    int to_play = 0;
     for(int i = 0; i < 4; i++){
       if(touch_array[i] > 0.17){
         play_note(notes_min[i] + ((touch_array[i]-0.17) * notes_max[i]));
@@ -242,6 +247,10 @@ static void adc_init(void) {
 
   nrf_saadc_channel_config_t touch_channel_config3 = NRFX_SAADC_DEFAULT_CHANNEL_CONFIG_SE(ANALOG_TOUCH3);
   error_code = nrfx_saadc_channel_init(ADC_TOUCH_CHANNEL3, &touch_channel_config3);
+  APP_ERROR_CHECK(error_code);
+
+  nrf_saadc_channel_config_t modulation_channel_config = NRFX_SAADC_DEFAULT_CHANNEL_CONFIG_SE(MODULATION);
+  error_code = nrfx_saadc_channel_init(ADC_MOD_CHANNEL, &modulation_channel_config);
   APP_ERROR_CHECK(error_code);
 
 }
