@@ -51,7 +51,7 @@ uint16_t sine_buffer[SINE_BUFFER_SIZE] = {0};
 
 // Sample data configurations
 // Note: this is a 32 kB buffer (about 25% of RAM)
-#define SAMPLING_FREQUENCY 160000 // 16 kHz sampling rate
+#define SAMPLING_FREQUENCY 16000 // 16 kHz sampling rate
 #define BUFFER_SIZE 16000 // one second worth of data
 uint16_t samples0[BUFFER_SIZE] = {0}; // stores PWM duty cycle values
 uint16_t samples1[BUFFER_SIZE] = {0};

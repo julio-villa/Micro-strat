@@ -52,14 +52,16 @@ static float adc_sample_blocking(uint8_t channel);
 static const nrfx_pwm_t PWM_INST = NRFX_PWM_INSTANCE(0);
 
 // Holds a pre-computed sine wave
-#define SINE_BUFFER_SIZE 500
+#define SINE_BUFFER_SIZE 2000
 uint16_t sine_buffer[SINE_BUFFER_SIZE] = {0};
 
 // Sample data configurations
 // Note: this is a 32 kB buffer (about 25% of RAM)
-#define SAMPLING_FREQUENCY 16000 // 16 kHz sampling rate
-#define BUFFER_SIZE 16000 // one second worth of data
+//int SAMPLING_FREQUENCY = 16000;
+#define SAMPLING_FREQUENCY 17000 // 16 kHz sampling rate
+#define BUFFER_SIZE 1000 // one second worth of data
 uint16_t samples[BUFFER_SIZE] = {0}; // stores PWM duty cycle values
+int touch_count = 0;
 
 nrfx_pwm_config_t config = {
     .output_pins = {SPEAKER_OUT,NRFX_PWM_PIN_NOT_USED, NRFX_PWM_PIN_NOT_USED, NRFX_PWM_PIN_NOT_USED},
@@ -99,7 +101,7 @@ static void gpio_init(void) {
 }
 
 
-static void compute_sine_wave(uint16_t max_value) {
+static void compute_sine_wave(uint16_t max_value, int touches) {
   for (int i=0; i<SINE_BUFFER_SIZE; i++) {
     // what percent into the sine wave are we?
     float percent = (float)i / (float)SINE_BUFFER_SIZE;
@@ -120,7 +122,13 @@ static void compute_sine_wave(uint16_t max_value) {
     uint16_t value = (uint16_t)(max_value * mag_1_sine);
 
     // save value in buffer
-    sine_buffer[i] = value * 5;
+    printf("%d \n", touches);
+    if(touches == 0){
+      sine_buffer[i] = value * 5;
+    }
+    else{
+      sine_buffer[i] = (int)((value * 2) / touches);
+    }
   }
 }
 
@@ -192,27 +200,32 @@ int notes_max[4] = {246, 329, 440, 587};
 
 static void sample_timer_callback(void* _unused) {
   //Do things periodically here
+  touch_count = 0;
 
   float t0 = adc_sample_blocking(ADC_TOUCH_CHANNEL0);
   float t1 = adc_sample_blocking(ADC_TOUCH_CHANNEL1);
   float t2 = adc_sample_blocking(ADC_TOUCH_CHANNEL2);
   float t3 = adc_sample_blocking(ADC_TOUCH_CHANNEL3);
-
   float mod = adc_sample_blocking(MODULATION);
 
-  printf("%f \n", mod);
-
   float touch_array[4] = {t0,t1,t2,t3};
+
+
+  bool capacitive0 = touched(TOUCH0);
 
   if(touch_array[0] > 0.17 || touch_array[1] > 0.17 || touch_array[2] > 0.17 || touch_array[3] > 0.17){
     for(int i = 0; i < 4; i++){
       if(touch_array[i] > 0.17){
+        touch_count++;
         play_note(notes_min[i] + ((touch_array[i]-0.17) * notes_max[i]));
       }
     }
   }
   else{
     nrfx_pwm_stop(&PWM_INST, true);
+  }
+  if(capacitive0){
+    
   }
 }
 
@@ -281,7 +294,7 @@ int main(void) {
   // initialize ADC
   adc_init();
 
-  compute_sine_wave(config.top_value - 1);
+  compute_sine_wave(config.top_value - 1, touch_count);
 
   // initialize app timers
   app_timer_init();
@@ -289,7 +302,8 @@ int main(void) {
 
   // start timer
   // change the rate to whatever you want
-  app_timer_start(sample_timer, 3276, NULL);
+  
+  app_timer_start(sample_timer, 3276/250, NULL);
   
   // loop forever
   while (1) {
