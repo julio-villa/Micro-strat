@@ -1,5 +1,4 @@
-// App for the Micro:strat
-// Read from capacitive touch sensors and ribbon sensors to output different notes, combinations of notes, and chords. 
+// microStrat Guitar Program
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -13,24 +12,16 @@
 
 #include "microbit_v2.h"
 
-// Digital outputs
-// These are GPIO pin numbers that can be used in nrf_gpio_* calls
 
-
-// Digital inputs
-// These are GPIO pin numbers that can be used in nrf_gpio_* calls
+// Digital GPIO inputs - Effects 
 #define TOUCH0 EDGE_P11
 #define TOUCH1 EDGE_P12
-#define TOUCH2 EDGE_P13
-#define TOUCH3 EDGE_P14
 
-// Analog inputs
-// These are GPIO pin numbers that can be used in ADC configurations
-#define ANALOG_TOUCH0  NRF_SAADC_INPUT_AIN0
+// Analog ADC configuration inputs - Notes
+#define ANALOG_TOUCH0 NRF_SAADC_INPUT_AIN0
 #define ANALOG_TOUCH1 NRF_SAADC_INPUT_AIN1
 #define ANALOG_TOUCH2 NRF_SAADC_INPUT_AIN2
 #define ANALOG_TOUCH3 NRF_SAADC_INPUT_AIN4
-#define MODULATION NRF_SAADC_INPUT_AIN5
 
 // ADC channel configurations
 // These are ADC channel numbers that can be used in ADC calls
@@ -38,10 +29,10 @@
 #define ADC_TOUCH_CHANNEL1  1
 #define ADC_TOUCH_CHANNEL2  2
 #define ADC_TOUCH_CHANNEL3  3
-#define ADC_MOD_CHANNEL  4
 
-// Global variables
+// Timers
 APP_TIMER_DEF(sample_timer);
+APP_TIMER_DEF(effects_timer);
 
 // Function prototypes
 static void gpio_init(void);
@@ -52,19 +43,22 @@ static float adc_sample_blocking(uint8_t channel);
 static const nrfx_pwm_t PWM_INST = NRFX_PWM_INSTANCE(0);
 
 // Holds a pre-computed sine wave
-#define SINE_BUFFER_SIZE 2000
+#define SINE_BUFFER_SIZE 100
 uint16_t sine_buffer[SINE_BUFFER_SIZE] = {0};
 
 // Sample data configurations
 // Note: this is a 32 kB buffer (about 25% of RAM)
-//int SAMPLING_FREQUENCY = 16000;
-#define SAMPLING_FREQUENCY 17000 // 16 kHz sampling rate
-#define BUFFER_SIZE 1000 // one second worth of data
+#define SAMPLING_FREQUENCY 17000 // 17 kHz sampling rate
+#define BUFFER_SIZE 5000 // one second worth of data
 uint16_t samples[BUFFER_SIZE] = {0}; // stores PWM duty cycle values
-int touch_count = 0;
+
+int touch_count = 0; // How many notes are being played at a time
+bool spacey_on = false;
+bool tremolo_on = false;
+int sfreq = 17000;
 
 nrfx_pwm_config_t config = {
-    .output_pins = {SPEAKER_OUT,NRFX_PWM_PIN_NOT_USED, NRFX_PWM_PIN_NOT_USED, NRFX_PWM_PIN_NOT_USED},
+    .output_pins = {EDGE_P8,NRFX_PWM_PIN_NOT_USED, NRFX_PWM_PIN_NOT_USED, NRFX_PWM_PIN_NOT_USED},
     .base_clock = NRF_PWM_CLK_16MHz,
     .count_mode = NRF_PWM_MODE_UP,
     .top_value = 16000000/SAMPLING_FREQUENCY/2,
@@ -73,22 +67,15 @@ nrfx_pwm_config_t config = {
   };
 
 static void pwm_init(void) {
-
   // Initialize the PWM
-  // SPEAKER_OUT is the output pin, mark the others as NRFX_PWM_PIN_NOT_USED
-  // Set the clock to 16 MHz
-  // Set a countertop value based on sampling frequency and repetitions
-
   nrfx_pwm_init(&PWM_INST, &config, NULL);
 }
 
 static void gpio_init(void) {
 
-  // Initialize input pin
+  // Initialize input GPIO pin
     nrf_gpio_cfg_input(TOUCH0, NRF_GPIO_PIN_NOPULL);
     nrf_gpio_cfg_input(TOUCH1, NRF_GPIO_PIN_NOPULL);
-    nrf_gpio_cfg_input(TOUCH2, NRF_GPIO_PIN_NOPULL);
-    nrf_gpio_cfg_input(TOUCH3, NRF_GPIO_PIN_NOPULL);
 
     // Initialize pins
     // Microphone pin MUST be high drive
@@ -96,7 +83,7 @@ static void gpio_init(void) {
     nrf_gpio_cfg(LED_MIC, NRF_GPIO_PIN_DIR_OUTPUT, NRF_GPIO_PIN_INPUT_DISCONNECT,
         NRF_GPIO_PIN_NOPULL, NRF_GPIO_PIN_S0H1, NRF_GPIO_PIN_NOSENSE);
 
-    // Enable microphone
+    // Enable microphone - We are not using this lol
     nrf_gpio_pin_set(LED_MIC);
 }
 
@@ -127,56 +114,61 @@ static void compute_sine_wave(uint16_t max_value, int touches) {
       sine_buffer[i] = value * 5;
     }
     else{
-      sine_buffer[i] = (int)((value * 2) / touches);
+      sine_buffer[i] = ((int)((value * 2) / touches));
     }
   }
 }
 
-static void play_note(uint16_t frequency) {
+// Sound Signal Generation -> What kind ofsound will be played
+static void play_note(uint16_t frequency, int samp_freq, bool trem_on) {
 
   // determine number of sine values to "step" per played sample
   // units are (sine-values/cycle) * (cycles/second) / (samples/second) = (sine-values/sample)
-  float step_size = (float)SINE_BUFFER_SIZE * (float)frequency / (float)SAMPLING_FREQUENCY;
-
-  // Fill sample buffer based on frequency
-  // Each element in the sample buffer will be an element from the sine_buffer
-  // The first should be sine_buffer[0],
-  //    then each successive sample will be "step_size" further along the sine wave
-  // Be sure to convert the cumulative step_size into an integer to access an item in sine_buffer
-  // If the cumulative steps are greater than SINE_BUFFER_SIZE, wrap back to zero
+  float step_size = (float)SINE_BUFFER_SIZE * (float)frequency / (float)samp_freq;
+  
+  //Tremolo setup
+  static float tremrate = 0.5;  
+  static float depth = 0.5; 
+  static float t = 0.0;
  
   float i = 0;
   int j = 0;
+
   while(j < BUFFER_SIZE){
-    samples[j] = sine_buffer[(int)i];
-    // printf("%u \n", samples[j]);
+    // tremolo modulation calculation
+    float tremolo = 1.0 - (depth*(2*sinf(t)+0.5));
+    t += (tremrate * 0.002);
+    if (t > 6.28318531) t -= 6.28318531;
+
+    // Caculate samples based on what effects are turned on/off - tremolo and spacey
+    if(trem_on && !spacey_on){
+      samples[j] = sine_buffer[(int)i] * tremolo;
+    }
+    else if(spacey_on && !trem_on){
+      samples[j] = 10 * sqrt((sine_buffer[(int)i]));
+    }
+    else if(spacey_on && trem_on){
+      samples[j] = 10 * sqrt((sine_buffer[(int)i])) * tremolo;
+    }
+    else{
+      samples[j] = (sine_buffer[(int)i]);
+    }
     j++;
     i = i + step_size;
     if(i>=SINE_BUFFER_SIZE){
       i -= SINE_BUFFER_SIZE;
     }
   }
-
-  // Create the pwm sequence (nrf_pwm_sequence_t) using the samples
-  // Do not make another buffer for this. You can reuse the sample buffer
-  // You should set a non-zero repeat value (this is how many times each _sample_ repeats)
-
     nrf_pwm_sequence_t pwm_sequence = {
     .values.p_common = samples,
     .length = BUFFER_SIZE,
     .repeats = 1,
     .end_delay = 0,
   };
-
-  // Start playback of the samples
-  // You will need to pass in a flag to loop the sound
-  // The playback count here is the number of times the entire buffer will repeat
-  //    (which doesn't matter if you set the loop flag)
-
   nrfx_pwm_simple_playback(&PWM_INST, &pwm_sequence, 1, NRFX_PWM_FLAG_LOOP);
 }
 
-
+// Check if a touch-event occurred
 bool touch(float v){
   if(v > 3.15){
     return true;
@@ -185,7 +177,6 @@ bool touch(float v){
     return false;
   }
 }
-
 bool touched(uint32_t pin){
   if(nrf_gpio_pin_read(pin) > 0){
     return true;
@@ -195,37 +186,50 @@ bool touched(uint32_t pin){
   }
 }
 
+// Arrays of max/min frequencies per "string"
 int notes_min[4] = {82, 110, 146, 196};
 int notes_max[4] = {246, 329, 440, 587};
 
+// Callback for detecting input on effects sensors
+static void effects_timer_callback(void* _unused) {
+
+  bool capacitive0 = touched(TOUCH0);
+  bool capacitive1 = touched(TOUCH1);
+
+  // Spacey Effect
+  if(capacitive0){
+    spacey_on = !spacey_on;
+  }
+  // Tremolo Effect 
+  if(capacitive1){
+    tremolo_on = !tremolo_on;
+  }
+}
+
 static void sample_timer_callback(void* _unused) {
-  //Do things periodically here
   touch_count = 0;
 
   float t0 = adc_sample_blocking(ADC_TOUCH_CHANNEL0);
   float t1 = adc_sample_blocking(ADC_TOUCH_CHANNEL1);
   float t2 = adc_sample_blocking(ADC_TOUCH_CHANNEL2);
   float t3 = adc_sample_blocking(ADC_TOUCH_CHANNEL3);
-  float mod = adc_sample_blocking(MODULATION);
 
-  float touch_array[4] = {t0,t1,t2,t3};
+  printf("%f \n", t3);
 
+  float touch_array[4] = {t3,t2,t1,t0};
 
-  bool capacitive0 = touched(TOUCH0);
-
-  if(touch_array[0] > 0.17 || touch_array[1] > 0.17 || touch_array[2] > 0.17 || touch_array[3] > 0.17){
+  // Sound Production upon Touch Event
+  if(touch_array[0] > 0.15 || touch_array[1] > 0.15 || touch_array[2] > 0.15 || touch_array[3] > 0.15){
     for(int i = 0; i < 4; i++){
-      if(touch_array[i] > 0.17){
+      if(touch_array[i] > 0.15){
         touch_count++;
-        play_note(notes_min[i] + ((touch_array[i]-0.17) * notes_max[i]));
+        play_note(notes_max[i] - ((touch_array[i]-0.15) * notes_min[i]), sfreq, tremolo_on);
       }
     }
   }
   else{
+    // If nothing is being touched, do not play anything
     nrfx_pwm_stop(&PWM_INST, true);
-  }
-  if(capacitive0){
-    
   }
 }
 
@@ -261,11 +265,6 @@ static void adc_init(void) {
   nrf_saadc_channel_config_t touch_channel_config3 = NRFX_SAADC_DEFAULT_CHANNEL_CONFIG_SE(ANALOG_TOUCH3);
   error_code = nrfx_saadc_channel_init(ADC_TOUCH_CHANNEL3, &touch_channel_config3);
   APP_ERROR_CHECK(error_code);
-
-  nrf_saadc_channel_config_t modulation_channel_config = NRFX_SAADC_DEFAULT_CHANNEL_CONFIG_SE(MODULATION);
-  error_code = nrfx_saadc_channel_init(ADC_MOD_CHANNEL, &modulation_channel_config);
-  APP_ERROR_CHECK(error_code);
-
 }
 
 static float adc_sample_blocking(uint8_t channel) {
@@ -274,9 +273,6 @@ static float adc_sample_blocking(uint8_t channel) {
   int16_t adc_counts = 0;
   ret_code_t error_code = nrfx_saadc_sample_convert(channel, &adc_counts);
   APP_ERROR_CHECK(error_code);
-
-  // convert ADC counts to volts
-  // 12-bit ADC with range from 0 to 3.6 Volts
 
   return ((float)adc_counts * 3.6/4096.0);
   // return voltage measurement
@@ -299,11 +295,11 @@ int main(void) {
   // initialize app timers
   app_timer_init();
   app_timer_create(&sample_timer, APP_TIMER_MODE_REPEATED, sample_timer_callback);
+  app_timer_create(&effects_timer, APP_TIMER_MODE_REPEATED, effects_timer_callback);
 
   // start timer
-  // change the rate to whatever you want
-  
-  app_timer_start(sample_timer, 3276/250, NULL);
+  app_timer_start(sample_timer, 3276/650, NULL);
+  app_timer_start(effects_timer, 3276 * 2, NULL);
   
   // loop forever
   while (1) {
