@@ -84,7 +84,7 @@ static void gpio_init(void) {
         NRF_GPIO_PIN_NOPULL, NRF_GPIO_PIN_S0H1, NRF_GPIO_PIN_NOSENSE);
 
     // Enable microphone - We are not using this lol
-    nrf_gpio_pin_set(LED_MIC);
+    // nrf_gpio_pin_set(LED_MIC); 
 }
 
 
